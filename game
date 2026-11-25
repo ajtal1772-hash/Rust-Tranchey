@@ -1,0 +1,116 @@
+name: Build IPA
+on:
+  workflow_dispatch:
+  push:
+    branches: [main, master]
+jobs:
+  build:
+    runs-on: macos-14
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Prepare project
+        run: |
+          mkdir -p Sources Resources
+          cp index.html Resources/index.html
+          curl -fL -o Resources/three.min.js https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js
+          sed -i '' 's#https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js#three.min.js#' Resources/index.html
+          grep -q 'src="three.min.js"' Resources/index.html
+          cat > project.yml <<'EOF'
+          name: SeraiaLiniia
+          options:
+            bundleIdPrefix: com.aytalamm
+            deploymentTarget:
+              iOS: "14.0"
+          targets:
+            SeraiaLiniia:
+              type: application
+              platform: iOS
+              sources:
+                - Sources
+                - path: Resources
+                  buildPhase: resources
+              settings:
+                base:
+                  PRODUCT_BUNDLE_IDENTIFIER: com.aytalamm.seraialinia
+                  PRODUCT_NAME: SeraiaLiniia
+                  MARKETING_VERSION: "0.0.1"
+                  CURRENT_PROJECT_VERSION: "1"
+                  TARGETED_DEVICE_FAMILY: "1,2"
+                  SWIFT_VERSION: "5.0"
+              info:
+                path: Info.plist
+                properties:
+                  CFBundleDisplayName: Серая Линия
+                  UILaunchScreen: {}
+                  UISupportedInterfaceOrientations:
+                    - UIInterfaceOrientationLandscapeLeft
+                    - UIInterfaceOrientationLandscapeRight
+                  UIStatusBarHidden: true
+                  UIRequiresFullScreen: true
+                  ITSAppUsesNonExemptEncryption: false
+          EOF
+          cat > Sources/App.swift <<'EOF'
+          import UIKit
+          import WebKit
+
+          @main
+          class AppDelegate: UIResponder, UIApplicationDelegate {
+              var window: UIWindow?
+              func application(_ application: UIApplication, didFinishLaunchingWithOptions launchOptions: [UIApplication.LaunchOptionsKey: Any]?) -> Bool {
+                  UIApplication.shared.isIdleTimerDisabled = true
+                  window = UIWindow(frame: UIScreen.main.bounds)
+                  window?.rootViewController = GameViewController()
+                  window?.makeKeyAndVisible()
+                  return true
+              }
+          }
+
+          class GameViewController: UIViewController {
+              var web: WKWebView!
+              override var prefersStatusBarHidden: Bool { true }
+              override var prefersHomeIndicatorAutoHidden: Bool { true }
+              override var supportedInterfaceOrientations: UIInterfaceOrientationMask { .landscape }
+              override func viewDidLoad() {
+                  super.viewDidLoad()
+                  view.backgroundColor = .black
+                  let cfg = WKWebViewConfiguration()
+                  cfg.allowsInlineMediaPlayback = true
+                  cfg.mediaTypesRequiringUserActionForPlayback = []
+                  web = WKWebView(frame: view.bounds, configuration: cfg)
+                  web.autoresizingMask = [.flexibleWidth, .flexibleHeight]
+                  web.scrollView.isScrollEnabled = false
+                  web.scrollView.bounces = false
+                  web.scrollView.contentInsetAdjustmentBehavior = .never
+                  web.isOpaque = false
+                  web.backgroundColor = .black
+                  view.addSubview(web)
+                  if let url = Bundle.main.url(forResource: "index", withExtension: "html") {
+                      web.loadFileURL(url, allowingReadAccessTo: url.deletingLastPathComponent())
+                  }
+              }
+          }
+          EOF
+
+      - name: Install XcodeGen
+        run: brew install xcodegen
+
+      - name: Generate Xcode project
+        run: xcodegen generate
+
+      - name: Build (unsigned)
+        run: |
+          xcodebuild -project SeraiaLiniia.xcodeproj -scheme SeraiaLiniia \
+            -configuration Release -sdk iphoneos -derivedDataPath build \
+            CODE_SIGNING_ALLOWED=NO CODE_SIGNING_REQUIRED=NO CODE_SIGN_IDENTITY="" build
+
+      - name: Package IPA
+        run: |
+          mkdir Payload
+          cp -R build/Build/Products/Release-iphoneos/SeraiaLiniia.app Payload/
+          zip -r SeraiaLiniia-0.0.1-unsigned.ipa Payload
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: SeraiaLiniia-ipa
+          path: SeraiaLiniia-0.0.1-unsigned.ipa
